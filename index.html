@@ -11,6 +11,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
         import { getFirestore, collection, onSnapshot, query, orderBy, limit } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
+        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyCuVnT9vXzb6qKN2gYww4DCuV1H-6Uuw0c",
@@ -24,8 +25,10 @@
 
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
+        const auth = getAuth(app);
 
         // State
+        let currentUser = null;
         let currentTab = 'waitlist';
         let searchQuery = '';
         let waitlistData = [];
@@ -52,30 +55,87 @@
         const downloadBtn = document.getElementById('download-btn');
         const loader = document.getElementById('loader');
 
-        // Listen for data
-        onSnapshot(query(collection(db, "waitlist"), orderBy("timestamp", "desc")), (s) => {
-            waitlistData = s.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            if (currentTab === 'waitlist') renderTable();
-            updateStats();
+        // Auth Guard & Redirect
+        onAuthStateChanged(auth, (user) => {
+            currentUser = user;
+            if (user) {
+                document.getElementById('login-overlay').classList.add('hidden');
+                initDashboard();
+            } else {
+                document.getElementById('login-overlay').classList.remove('hidden');
+            }
+        });
+
+        const loginForm = document.getElementById('login-form');
+        loginForm?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = e.target.email.value;
+            const password = e.target.password.value;
+            const btn = e.target.querySelector('button');
+
+            try {
+                btn.disabled = true;
+                btn.innerText = 'Signing in...';
+                await signInWithEmailAndPassword(auth, email, password);
+            } catch (err) {
+                console.error("Login Failed:", err);
+                alert("Login Failed: " + err.message);
+                btn.disabled = false;
+                btn.innerText = 'Sign In to Dashboard';
+            }
+        });
+
+        window.logout = () => signOut(auth);
+
+        function initDashboard() {
+            // Listen for data
+            onSnapshot(query(collection(db, "waitlist"), orderBy("timestamp", "desc")), (s) => {
+                waitlistData = s.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                if (currentTab === 'waitlist') renderTable();
+                updateStats();
+                loader.style.display = 'none';
+            }, (err) => {
+                console.error("Firestore Waitlist Error:", err);
+                if (err.code === 'permission-denied') showPermissionError();
+            });
+
+            onSnapshot(query(collection(db, "riders"), orderBy("timestamp", "desc")), (s) => {
+                ridersData = s.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                if (currentTab === 'riders') renderTable();
+                updateStats();
+            }, (err) => console.error("Firestore Riders Error:", err));
+
+            onSnapshot(query(collection(db, "support_messages"), orderBy("timestamp", "desc")), (s) => {
+                supportData = s.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                if (currentTab === 'support') renderTable();
+            }, (err) => console.error("Firestore Support Error:", err));
+
+            onSnapshot(query(collection(db, "site_events"), orderBy("timestamp", "desc"), limit(500)), (s) => {
+                eventsData = s.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                if (currentTab === 'events') renderTable();
+                updateStats();
+            }, (err) => console.error("Firestore Events Error:", err));
+        }
+
+        function showPermissionError() {
+            tableBody.innerHTML = `
+                <tr>
+                    <td colspan="100%" class="px-6 py-20 text-center">
+                        <div class="flex flex-col items-center gap-4">
+                            <span class="text-4xl">🔐</span>
+                            <h3 class="text-xl font-bold text-slate-800">Access Restricted</h3>
+                            <p class="text-slate-500 max-w-sm">Firestore security rules are blocking the dashboard from reading data. Please sign in or update your security rules.</p>
+                            <button onclick="location.reload()" class="mt-4 px-6 py-2 bg-brand-primary text-brand-dark rounded-full font-bold hover:scale-105 transition-transform">
+                                Retry Connection
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            `;
             loader.style.display = 'none';
-        });
-
-        onSnapshot(query(collection(db, "riders"), orderBy("timestamp", "desc")), (s) => {
-            ridersData = s.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            if (currentTab === 'riders') renderTable();
-            updateStats();
-        });
-
-        onSnapshot(query(collection(db, "support_messages"), orderBy("timestamp", "desc")), (s) => {
-            supportData = s.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            if (currentTab === 'support') renderTable();
-        });
-
-        onSnapshot(query(collection(db, "site_events"), orderBy("timestamp", "desc"), limit(500)), (s) => {
-            eventsData = s.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            if (currentTab === 'events') renderTable();
-            updateStats();
-        });
+            document.getElementById('last-sync-time').innerText = 'Connection blocked by security rules';
+            document.getElementById('last-sync-time').classList.add('text-red-500');
+        }
 
         function updateStats() {
             // Visits = event_name: page_view
@@ -215,6 +275,36 @@
 
 <body class="bg-slate-50 min-h-screen font-sans text-slate-900">
 
+    <!-- Login Overlay -->
+    <div id="login-overlay" class="fixed inset-0 z-[100] bg-brand-dark flex items-center justify-center p-6 hidden">
+        <div class="bg-white rounded-3xl w-full max-w-md p-8 shadow-2xl">
+            <div class="flex items-center gap-3 mb-8 justify-center">
+                <div
+                    class="w-10 h-10 bg-brand-primary rounded-xl flex items-center justify-center text-brand-dark font-black">
+                    K</div>
+                <h2 class="text-2xl font-black text-brand-dark">KwikRide <span class="text-brand-primary">Admin</span>
+                </h2>
+            </div>
+            <form id="login-form" class="space-y-6">
+                <div>
+                    <label class="block text-sm font-bold text-slate-700 mb-2">Admin Email</label>
+                    <input type="email" name="email" required
+                        class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:border-brand-primary focus:ring-1 focus:ring-brand-primary outline-none transition-all">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-slate-700 mb-2">Password</label>
+                    <input type="password" name="password" required
+                        class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:border-brand-primary focus:ring-1 focus:ring-brand-primary outline-none transition-all">
+                </div>
+                <button type="submit"
+                    class="w-full bg-brand-dark text-white font-bold py-4 rounded-xl hover:bg-brand-primary hover:text-brand-dark transition-all shadow-xl">
+                    Sign In to Dashboard
+                </button>
+            </form>
+            <p class="text-center text-slate-400 text-xs mt-6">Secure Enterprise Access Only</p>
+        </div>
+    </div>
+
     <header class="bg-brand-dark text-white px-8 py-6 flex justify-between items-center shadow-2xl sticky top-0 z-50">
         <div class="flex items-center gap-3">
             <div
@@ -223,10 +313,16 @@
             <h1 class="text-2xl font-black tracking-tighter">KwikRide <span class="text-brand-primary">Dashboard</span>
             </h1>
         </div>
-        <button id="download-btn"
-            class="bg-brand-primary text-brand-dark px-6 py-2.5 rounded-full font-bold text-sm hover:scale-105 transition-transform shadow-lg">
-            Download Excel (.xlsx)
-        </button>
+        <div class="flex items-center gap-4">
+            <button id="download-btn"
+                class="bg-brand-primary text-brand-dark px-6 py-2.5 rounded-full font-bold text-sm hover:scale-105 transition-transform shadow-lg">
+                Download Excel (.xlsx)
+            </button>
+            <button onclick="logout()"
+                class="bg-white/10 text-white/70 hover:text-white px-4 py-2.5 rounded-full font-bold text-sm transition-colors border border-white/10 hover:bg-white/20">
+                Sign Out
+            </button>
+        </div>
     </header>
 
     <main class="max-w-[1500px] mx-auto px-8 py-10">
