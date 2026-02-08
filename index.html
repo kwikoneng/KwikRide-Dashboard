@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KwikRide | Admin Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <!-- Firebase modular SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
+        import { getFirestore, collection, onSnapshot, query, orderBy, limit } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyCuVnT9vXzb6qKN2gYww4DCuV1H-6Uuw0c",
+            authDomain: "kwikride-b9477.firebaseapp.com",
+            projectId: "kwikride-b9477",
+            storageBucket: "kwikride-b9477.firebasestorage.app",
+            messagingSenderId: "19328711804",
+            appId: "1:19328711804:web:0c12bd234ed899f2581df9",
+            measurementId: "G-XB7F7WPNQ3"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // State
+        let currentTab = 'waitlist';
+        let searchQuery = '';
+        let waitlistData = [];
+        let ridersData = [];
+        let supportData = [];
+        let eventsData = [];
+
+        // UI Elements
+        const tableBody = document.getElementById('table-body');
+        const tableHeader = document.getElementById('table-header');
+        const searchInput = document.getElementById('search-input');
+        const rowCountText = document.getElementById('row-count');
+        const tabs = {
+            waitlist: document.getElementById('tab-waitlist'),
+            riders: document.getElementById('tab-riders'),
+            support: document.getElementById('tab-support'),
+            events: document.getElementById('tab-events')
+        };
+        const stats = {
+            visits: document.getElementById('stat-visits'),
+            clicks: document.getElementById('stat-clicks'),
+            submissions: document.getElementById('stat-submissions')
+        };
+        const downloadBtn = document.getElementById('download-btn');
+        const loader = document.getElementById('loader');
+
+        // Listen for data
+        onSnapshot(query(collection(db, "waitlist"), orderBy("timestamp", "desc")), (s) => {
+            waitlistData = s.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            if (currentTab === 'waitlist') renderTable();
+            updateStats();
+            loader.style.display = 'none';
+        });
+
+        onSnapshot(query(collection(db, "riders"), orderBy("timestamp", "desc")), (s) => {
+            ridersData = s.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            if (currentTab === 'riders') renderTable();
+            updateStats();
+        });
+
+        onSnapshot(query(collection(db, "support_messages"), orderBy("timestamp", "desc")), (s) => {
+            supportData = s.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            if (currentTab === 'support') renderTable();
+        });
+
+        onSnapshot(query(collection(db, "site_events"), orderBy("timestamp", "desc"), limit(500)), (s) => {
+            eventsData = s.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            if (currentTab === 'events') renderTable();
+            updateStats();
+        });
+
+        function updateStats() {
+            // Visits = event_name: page_view
+            const visitCount = eventsData.filter(e => e.event_name === 'page_view').length;
+            // Clicks = event_name: waitlist_button_click
+            const clickCount = eventsData.filter(e => e.event_name === 'waitlist_button_click').length;
+            // Submissions = sum of waitlist + riders + support
+            const subCount = waitlistData.length + ridersData.length + supportData.length;
+
+            stats.visits.innerText = visitCount;
+            stats.clicks.innerText = clickCount;
+            stats.submissions.innerText = subCount;
+
+            // Update timestamp
+            const now = new Date();
+            document.getElementById('last-sync-time').innerText = `Last updated: ${now.toLocaleTimeString()}`;
+        }
+
+        function renderTable() {
+            let data = [];
+            let columns = [];
+
+            if (currentTab === 'waitlist') {
+                data = waitlistData;
+                columns = ['First Name', 'Last Name', 'Phone', 'Email', 'State', 'LGA', 'Zone', 'Address', 'Time'];
+            } else if (currentTab === 'riders') {
+                data = ridersData;
+                columns = ['Full Name', 'Phone', 'Email', 'City', 'Vehicle', 'Experience', 'Status', 'Time'];
+            } else if (currentTab === 'support') {
+                data = supportData;
+                columns = ['Subject', 'Message', 'Source', 'Time'];
+            } else if (currentTab === 'events') {
+                data = eventsData;
+                columns = ['Event', 'Page', 'Details', 'Time'];
+            }
+
+            // Apply Search Filtering
+            if (searchQuery) {
+                data = data.filter(item => {
+                    const str = JSON.stringify(item).toLowerCase();
+                    return str.includes(searchQuery.toLowerCase());
+                });
+            }
+
+            tableBody.innerHTML = '';
+            tableHeader.innerHTML = columns.map(col => `<th class="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider border-b border-slate-100">${col}</th>`).join('');
+
+            rowCountText.innerText = `Showing ${data.length} records`;
+
+            if (data.length === 0) {
+                tableBody.innerHTML = `<tr><td colspan="100%" class="px-6 py-10 text-center text-slate-400 font-medium italic">No results found ${searchQuery ? 'for "' + searchQuery + '"' : 'yet...'}</td></tr>`;
+                return;
+            }
+
+            data.forEach(item => {
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-slate-50 transition-colors border-b border-slate-50 text-sm text-slate-600';
+
+                let cells = [];
+                const time = item.timestamp ? new Date(item.timestamp.seconds * 1000).toLocaleString() : 'Just now';
+
+                if (currentTab === 'waitlist') {
+                    cells = [item.firstName, item.lastName, item.phone, item.email, item.state, item.lga, item.zone, item.address, time];
+                } else if (currentTab === 'riders') {
+                    cells = [item.fullName, item.phone, item.email, item.city, item.vehicleType || item.bikeReg, item.experience, item.status || 'Pending', time];
+                } else if (currentTab === 'support') {
+                    cells = [item.subject, `<div class="max-w-xs truncate" title="${item.message}">${item.message}</div>`, item.source, time];
+                } else if (currentTab === 'events') {
+                    const details = item.event_name === 'waitlist_button_click' ? `Btn: ${item.button_text}` : (item.event_name === 'form_submission' ? `Form: ${item.form_id}` : 'View');
+                    cells = [`<span class="px-2 py-1 rounded-md text-[10px] font-bold uppercase ${getEventColor(item.event_name)}">${item.event_name}</span>`, item.page_path, details, time];
+                }
+
+                tr.innerHTML = cells.map(cell => `<td class="px-6 py-4 whitespace-nowrap">${cell || ''}</td>`).join('');
+                tableBody.appendChild(tr);
+            });
+        }
+
+        function getEventColor(evt) {
+            if (evt === 'page_view') return 'bg-blue-100 text-blue-600';
+            if (evt === 'waitlist_button_click') return 'bg-orange-100 text-orange-600';
+            if (evt === 'form_submission') return 'bg-green-100 text-green-600';
+            return 'bg-slate-100 text-slate-600';
+        }
+
+        // Search Input
+        searchInput.oninput = (e) => {
+            searchQuery = e.target.value;
+            renderTable();
+        };
+
+        // Tab switching
+        Object.keys(tabs).forEach(tab => {
+            tabs[tab].onclick = () => {
+                currentTab = tab;
+                Object.values(tabs).forEach(t => t.className = 'px-6 py-4 font-medium text-slate-500 hover:text-brand-dark transition-colors');
+                tabs[tab].className = 'px-6 py-4 font-bold border-b-2 border-brand-primary text-brand-primary bg-white';
+                renderTable();
+            };
+        });
+
+        // Download Excel
+        downloadBtn.onclick = () => {
+            let data = currentTab === 'waitlist' ? waitlistData : (currentTab === 'riders' ? ridersData : (currentTab === 'support' ? supportData : eventsData));
+            if (data.length === 0) return alert('No data to export!');
+
+            const exportData = data.map(({ id, timestamp, ...rest }) => ({
+                ...rest,
+                Formatted_Time: timestamp ? new Date(timestamp.seconds * 1000).toLocaleString() : ''
+            }));
+
+            const ws = XLSX.utils.json_to_sheet(exportData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, currentTab.toUpperCase());
+            XLSX.writeFile(wb, `KwikRide_${currentTab}_${new Date().toISOString().split('T')[0]}.xlsx`);
+        };
+
+        renderTable();
+    </script>
+    <style>
+        .text-brand-primary {
+            color: #00C853;
+        }
+
+        .border-brand-primary {
+            border-color: #00C853;
+        }
+
+        .bg-brand-primary {
+            background-color: #00C853;
+        }
+
+        .bg-brand-dark {
+            background-color: #022C22;
+        }
+    </style>
+</head>
+
+<body class="bg-slate-50 min-h-screen font-sans text-slate-900">
+
+    <header class="bg-brand-dark text-white px-8 py-6 flex justify-between items-center shadow-2xl sticky top-0 z-50">
+        <div class="flex items-center gap-3">
+            <div
+                class="w-10 h-10 bg-brand-primary rounded-xl flex items-center justify-center text-brand-dark font-black">
+                K</div>
+            <h1 class="text-2xl font-black tracking-tighter">KwikRide <span class="text-brand-primary">Dashboard</span>
+            </h1>
+        </div>
+        <button id="download-btn"
+            class="bg-brand-primary text-brand-dark px-6 py-2.5 rounded-full font-bold text-sm hover:scale-105 transition-transform shadow-lg">
+            Download Excel (.xlsx)
+        </button>
+    </header>
+
+    <main class="max-w-[1500px] mx-auto px-8 py-10">
+
+        <!-- Stats Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10">
+            <div class="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">Total Site Visits</p>
+                <div class="flex items-end justify-between">
+                    <h3 id="stat-visits" class="text-4xl font-black text-brand-dark">0</h3>
+                    <span class="text-blue-500 text-sm font-bold bg-blue-50 px-2 py-1 rounded-lg">Live</span>
+                </div>
+            </div>
+            <div class="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">Waitlist Clicks</p>
+                <div class="flex items-end justify-between">
+                    <h3 id="stat-clicks" class="text-4xl font-black text-brand-dark">0</h3>
+                    <span class="text-orange-500 text-sm font-bold bg-orange-50 px-2 py-1 rounded-lg">Potential</span>
+                </div>
+            </div>
+            <div class="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">Total Submissions</p>
+                <div class="flex items-end justify-between">
+                    <h3 id="stat-submissions" class="text-4xl font-black text-brand-dark">0</h3>
+                    <span class="text-green-500 text-sm font-bold bg-green-50 px-2 py-1 rounded-lg">Finalized</span>
+                </div>
+            </div>
+            <div
+                class="bg-brand-primary/10 p-6 rounded-3xl border border-brand-primary/20 shadow-sm flex flex-col justify-center">
+                <div id="loader" class="flex items-center gap-2 text-brand-primary">
+                    <span class="w-3 h-3 rounded-full bg-brand-primary animate-ping"></span>
+                    <span class="text-sm font-black uppercase tracking-widest">System Online</span>
+                </div>
+                <p id="last-sync-time" class="text-[10px] text-brand-dark/50 mt-2 font-bold uppercase">Syncing...</p>
+            </div>
+        </div>
+
+        <!-- Tabs & Filters -->
+        <div class="bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-100">
+
+            <div
+                class="p-6 border-b border-slate-100 bg-slate-50/30 flex flex-col md:flex-row justify-between items-center gap-4">
+                <div class="flex bg-white p-1 rounded-2xl border border-slate-200">
+                    <button id="tab-waitlist"
+                        class="px-6 py-2.5 rounded-xl font-bold border-b-2 border-brand-primary text-brand-primary bg-slate-50 transition-all">
+                        Waitlist
+                    </button>
+                    <button id="tab-riders"
+                        class="px-6 py-2.5 rounded-xl font-medium text-slate-500 hover:text-brand-dark transition-colors">
+                        Riders
+                    </button>
+                    <button id="tab-support"
+                        class="px-6 py-2.5 rounded-xl font-medium text-slate-500 hover:text-brand-dark transition-colors">
+                        Support
+                    </button>
+                    <button id="tab-events"
+                        class="px-6 py-2.5 rounded-xl font-medium text-slate-500 hover:text-brand-dark transition-colors">
+                        Analytics
+                    </button>
+                </div>
+
+                <div class="flex items-center gap-4 w-full md:w-auto">
+                    <div class="relative flex-1 md:w-80">
+                        <span class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">🔍</span>
+                        <input type="text" id="search-input" placeholder="Search records..."
+                            class="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary outline-none transition-all text-sm">
+                    </div>
+                    <span id="row-count"
+                        class="text-xs font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap bg-slate-100 px-3 py-2 rounded-lg">
+                        0 records
+                    </span>
+                </div>
+            </div>
+
+            <!-- Table -->
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead>
+                        <tr id="table-header" class="bg-slate-50/50 text-slate-400">
+                            <!-- Dynamic Headers -->
+                        </tr>
+                    </thead>
+                    <tbody id="table-body">
+                        <!-- Dynamic Rows -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </main>
+
+    <footer class="text-center py-10 text-slate-400 text-[10px] uppercase tracking-[0.2em] font-black">
+        KwikRide Enterprise Admin Portal • Powered by KwikCloud v2.0
+    </footer>
+
+</body>
+
+</html>
